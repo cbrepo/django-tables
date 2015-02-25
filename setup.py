@@ -1,55 +1,43 @@
 #!/usr/bin/env python
-import os
-from distutils.core import setup
-
-
-# Figure out the version; this could be done by importing the
-# module, though that requires Django to be already installed,
-# which may not be the case when processing a pip requirements
-# file, for example.
 import re
-here = os.path.dirname(os.path.abspath(__file__))
-version_re = re.compile(
-    r'__version__ = (\(.*?\))')
-fp = open(os.path.join(here, 'django_tables', '__init__.py'))
-version = None
-for line in fp:
-    match = version_re.search(line)
-    if match:
-        version = eval(match.group(1))
-        break
-else:
-    raise Exception("Cannot find version in __init__.py")
-fp.close()
+from setuptools import setup, find_packages
 
 
-def find_packages(root):
-    # so we don't depend on setuptools; from the Storm ORM setup.py
-    packages = []
-    for directory, subdirectories, files in os.walk(root):
-        if '__init__.py' in files:
-            packages.append(directory.replace(os.sep, '.'))
-    return packages
+with open('django_tables2/__init__.py', 'rb') as f:
+    version = str(re.search('__version__ = "(.+?)"', f.read().decode('utf-8')).group(1))
 
 
 setup(
-    name = 'django-tables',
-    version=".".join(map(str, version)),
-    description = 'Render QuerySets as tabular data in Django.',
-    author = 'Michael Elsdoerfer',
-    author_email = 'michael@elsdoerfer.info',
-    license = 'BSD',
-    url = 'http://launchpad.net/django-tables',
-    classifiers = [
-        'Development Status :: 3 - Alpha',
+    name='django-tables2',
+    version=version,
+    description='Table/data-grid framework for Django',
+
+    author='Bradley Ayers',
+    author_email='bradley.ayers@gmail.com',
+    license='Simplified BSD',
+    url='https://github.com/bradleyayers/django-tables2/',
+
+    packages=find_packages(exclude=['tests.*', 'tests', 'example.*', 'example']),
+    include_package_data=True,  # declarations in MANIFEST.in
+
+    install_requires=['Django >=1.2', 'six'],
+
+    test_loader='tests:loader',
+    test_suite='tests.everything',
+
+    classifiers=[
         'Environment :: Web Environment',
         'Framework :: Django',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: BSD License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
+        'Programming Language :: Python :: 2',
+        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.3',
+        'Programming Language :: Python :: 3.4',
         'Topic :: Internet :: WWW/HTTP',
         'Topic :: Software Development :: Libraries',
-        ],
-    packages = find_packages('django_tables'),
+    ],
 )
