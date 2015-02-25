@@ -2,7 +2,7 @@ import copy
 from django.http import Http404
 from django.core import paginator
 from django.utils.datastructures import SortedDict
-from django.utils.encoding import force_unicode, StrAndUnicode
+from django.utils.encoding import force_unicode, python_2_unicode_compatible
 from django.utils.text import capfirst
 from columns import Column
 from options import options
@@ -76,7 +76,6 @@ class DeclarativeColumnsMetaclass(type):
         attrs['_meta'] = TableOptions(attrs.get('Meta', None))
         return type.__new__(cls, name, bases, attrs)
 
-
 def rmprefix(s):
     """Normalize a column name by removing a potential sort prefix"""
     return (s[:1]=='-' and [s[1:]] or [s])[0]
@@ -85,7 +84,8 @@ def toggleprefix(s):
     """Remove - prefix is existing, or add if missing."""
     return ((s[:1] == '-') and [s[1:]] or ["-"+s])[0]
 
-class OrderByTuple(tuple, StrAndUnicode):
+@python_2_unicode_compatible
+class OrderByTuple(tuple):
         """Stores 'order by' instructions; Used to render output in a format
         we understand as input (see __unicode__) - especially useful in
         templates.
@@ -96,6 +96,9 @@ class OrderByTuple(tuple, StrAndUnicode):
         def __unicode__(self):
             """Output in our input format."""
             return ",".join(self)
+
+        def __str__(self):
+            return self.__unicode__()
 
         def __contains__(self, name):
             """Determine whether a column is part of this order."""
@@ -260,8 +263,8 @@ class Columns(object):
         self._spawn_columns()
         return self._columns[name]
 
-
-class BoundColumn(StrAndUnicode):
+@python_2_unicode_compatible
+class BoundColumn():
     """'Runtime' version of ``Column`` that is bound to a table instance,
     and thus knows about the table's data.
 
@@ -277,13 +280,6 @@ class BoundColumn(StrAndUnicode):
         self.declared_name = name
         # expose some attributes of the column more directly
         self.visible = column.visible
-
-    @property
-    def accessor(self):
-        """The key to use when accessing this column's values in the
-        source data.
-        """
-        return self.column.data if self.column.data else self.declared_name
 
     def _get_sortable(self):
         if self.column.sortable is not None:
@@ -329,6 +325,9 @@ class BoundColumn(StrAndUnicode):
         s = self.column.verbose_name or self.name.replace('_', ' ')
         return capfirst(force_unicode(s))
 
+    def __str__(self):
+        return self.__unicode__()
+
     def as_html(self):
         pass
 
@@ -351,19 +350,9 @@ class BoundRow(object):
         """Returns this row's value for a column. All other access methods,
         e.g. __iter__, lead ultimately to this."""
 
-        column = self.table.columns[name]
-
-        render_func = getattr(self.table, 'render_%s' % name, False)
-        if render_func:
-            return render_func(self.data)
-        else:
-            return self._default_render(column)
-
-    def _default_render(self, column):
-        """Returns a cell's content. This is used unless the user
-        provides a custom ``render_FOO`` method.
-        """
-        result = self.data[column.accessor]
+        # We are supposed to return ``name``, but the column might be
+        # named differently in the source data.
+        result =  self.data[self.table._cols_to_fields([name])[0]]
 
         # if the field we are pointing to is a callable, remove it
         if callable(result):
@@ -541,7 +530,11 @@ class BaseTable(object):
                 prefix = ''
             # find the field name
             column = self.columns[name]
-            result.append(prefix + column.accessor)
+            if column.column.data and not callable(column.column.data):
+                name_in_source = column.column.data
+            else:
+                name_in_source = column.declared_name
+            result.append(prefix + name_in_source)
         return result
 
     def _validate_column_name(self, name, purpose):
