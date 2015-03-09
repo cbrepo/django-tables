@@ -2,7 +2,7 @@ import copy
 from django.http import Http404
 from django.core import paginator
 from django.utils.datastructures import SortedDict
-from django.utils.encoding import force_unicode, StrAndUnicode
+from django.utils.encoding import force_unicode, python_2_unicode_compatible
 from django.utils.text import capfirst
 from columns import Column
 from options import options
@@ -84,7 +84,8 @@ def toggleprefix(s):
     """Remove - prefix is existing, or add if missing."""
     return ((s[:1] == '-') and [s[1:]] or ["-"+s])[0]
 
-class OrderByTuple(tuple, StrAndUnicode):
+@python_2_unicode_compatible
+class OrderByTuple(tuple):
         """Stores 'order by' instructions; Used to render output in a format
         we understand as input (see __unicode__) - especially useful in
         templates.
@@ -94,6 +95,9 @@ class OrderByTuple(tuple, StrAndUnicode):
         """
         def __unicode__(self):
             """Output in our input format."""
+            return ",".join(self)
+
+        def __str__(self):
             return ",".join(self)
 
         def __contains__(self, name):
@@ -260,7 +264,8 @@ class Columns(object):
         return self._columns[name]
 
 
-class BoundColumn(StrAndUnicode):
+@python_2_unicode_compatible
+class BoundColumn(object):
     """'Runtime' version of ``Column`` that is bound to a table instance,
     and thus knows about the table's data.
 
@@ -318,6 +323,10 @@ class BoundColumn(StrAndUnicode):
     values = property(_get_values)
 
     def __unicode__(self):
+        s = self.column.verbose_name or self.name.replace('_', ' ')
+        return capfirst(force_unicode(s))
+
+    def __str__(self):
         s = self.column.verbose_name or self.name.replace('_', ' ')
         return capfirst(force_unicode(s))
 
