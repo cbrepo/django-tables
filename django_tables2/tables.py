@@ -1,20 +1,22 @@
 # coding: utf-8
 from __future__ import unicode_literals
+
+import copy
+from collections import OrderedDict
+
+import six
+from django import VERSION
+from django.core.paginator import Paginator
+from django.db.models.fields import FieldDoesNotExist
+from django.template import RequestContext
+from django.template.loader import get_template
+from django.utils.functional import cached_property
+
 from . import columns
 from .config import RequestConfig
 from .rows import BoundRows
-from .utils import (Accessor, AttributeDict, build_request, cached_property,
-                    computed_values, OrderBy, OrderByTuple, segment, Sequence)
-import copy
-import sys
-from django.core.paginator       import Paginator
-from django.db.models.fields     import FieldDoesNotExist
-from django.utils.datastructures import SortedDict
-from django.template             import RequestContext
-from django.template.loader      import get_template
-import six
-import warnings
-
+from .utils import (Accessor, AttributeDict, OrderBy, OrderByTuple, Sequence,
+                    computed_values, segment)
 
 QUERYSET_ACCESSOR_SEPARATOR = '__'
 
@@ -31,7 +33,7 @@ class TableData(object):
         self.table = table
         # data may be a QuerySet-like objects with count() and order_by()
         if (hasattr(data, 'count') and callable(data.count) and
-            hasattr(data, 'order_by') and callable(data.order_by)):
+                hasattr(data, 'order_by') and callable(data.order_by)):
             self.queryset = data
         # otherwise it must be convertable to a list
         else:
@@ -50,8 +52,9 @@ class TableData(object):
             # Use the queryset count() method to get the length, instead of
             # loading all results into memory. This allows, for example,
             # smart paginators that use len() to perform better.
-            self._length = (self.queryset.count() if hasattr(self, 'queryset')
-                                                  else len(self.list))
+            self._length = (
+                self.queryset.count() if hasattr(self, 'queryset') else len(self.list)
+            )
         return self._length
 
     @property
@@ -101,7 +104,8 @@ class TableData(object):
                 accessors += bound_column.order_by
         if hasattr(self, "queryset"):
             translate = lambda accessor: accessor.replace(Accessor.SEPARATOR, QUERYSET_ACCESSOR_SEPARATOR)
-            self.queryset = self.queryset.order_by(*(translate(a) for a in accessors))
+            if accessors:
+                self.queryset = self.queryset.order_by(*(translate(a) for a in accessors))
         else:
             self.list.sort(key=OrderByTuple(accessors).key)
 
@@ -138,7 +142,7 @@ class TableData(object):
         """
         The full (plural) name of the data.
 
-        This uses the same approach as `.verbose_name`.
+        This uses the same approach as `TableData.verbose_name`.
         """
         if hasattr(self, "queryset"):
             return self.queryset.model._meta.verbose_name_plural
@@ -172,12 +176,12 @@ class DeclarativeColumnsMetaclass(type):
             if hasattr(base, "base_columns"):
                 parent_columns = list(base.base_columns.items()) + parent_columns
         # Start with the parent columns
-        attrs["base_columns"] = SortedDict(parent_columns)
+        attrs["base_columns"] = OrderedDict(parent_columns)
         # Possibly add some generated columns based on a model
         if opts.model:
-            extra = SortedDict()
+            extra = OrderedDict()
             # honor Table.Meta.fields, fallback to model._meta.fields
-            if opts.fields:
+            if opts.fields is not None:
                 # Each item in opts.fields is the name of a model field or a
                 # normal attribute on the model
                 for field_name in opts.fields:
@@ -194,7 +198,7 @@ class DeclarativeColumnsMetaclass(type):
             attrs["base_columns"].update(extra)
 
         # Explicit columns override both parent and generated columns
-        attrs["base_columns"].update(SortedDict(cols))
+        attrs["base_columns"].update(OrderedDict(cols))
         # Apply any explicit exclude setting
         for exclusion in opts.exclude:
             if exclusion in attrs["base_columns"]:
@@ -203,8 +207,8 @@ class DeclarativeColumnsMetaclass(type):
         if opts.sequence:
             opts.sequence.expand(attrs["base_columns"].keys())
             # Table's sequence defaults to sequence declared in Meta
-            #attrs['_sequence'] = opts.sequence
-            attrs["base_columns"] = SortedDict(((x, attrs["base_columns"][x]) for x in opts.sequence))
+            # attrs['_sequence'] = opts.sequence
+            attrs["base_columns"] = OrderedDict(((x, attrs["base_columns"][x]) for x in opts.sequence))
 
         # set localize on columns
         for col_name in attrs["base_columns"].keys():
@@ -230,13 +234,12 @@ class TableOptions(object):
     :param options: options for a table
     :type  options: `.Table.Meta` on a `.Table`
     """
-    # pylint: disable=R0902
     def __init__(self, options=None):
         super(TableOptions, self).__init__()
         self.attrs = AttributeDict(getattr(options, "attrs", {}))
         self.default = getattr(options, "default", "—")
         self.empty_text = getattr(options, "empty_text", None)
-        self.fields = getattr(options, "fields", ())
+        self.fields = getattr(options, "fields", None)
         self.exclude = getattr(options, "exclude", ())
         order_by = getattr(options, "order_by", None)
         if isinstance(order_by, six.string_types):
@@ -247,11 +250,9 @@ class TableOptions(object):
         self.per_page = getattr(options, "per_page", 25)
         self.per_page_field = getattr(options, "per_page_field", "per_page")
         self.prefix = getattr(options, "prefix", "")
+        self.show_header = getattr(options, "show_header", True)
         self.sequence = Sequence(getattr(options, "sequence", ()))
-        if hasattr(options, "sortable"):
-            warnings.warn("`Table.Meta.sortable` is deprecated, use `orderable` instead",
-                          DeprecationWarning)
-        self.orderable = self.sortable = getattr(options, "orderable", getattr(options, "sortable", True))
+        self.orderable = getattr(options, "orderable", True)
         self.model = getattr(options, "model", None)
         self.template = getattr(options, "template", "django_tables2/table.html")
         self.localize = getattr(options, "localize", ())
@@ -339,6 +340,14 @@ class TableBase(object):
         :type: `unicode`
 
 
+    .. attribute:: show_header
+
+        If `False`, the table will not have a header (`<thead>`), default
+        value is `True`
+
+        :type: `bool`
+
+
     .. attribute:: prefix
 
         A prefix for querystring fields to avoid name-clashes when using
@@ -385,7 +394,7 @@ class TableBase(object):
     def __init__(self, data, order_by=None, orderable=None, empty_text=None,
                  exclude=None, attrs=None, sequence=None, prefix=None,
                  order_by_field=None, page_field=None, per_page_field=None,
-                 template=None, sortable=None, default=None, request=None):
+                 template=None, default=None, request=None, show_header=None):
         super(TableBase, self).__init__()
         self.exclude = exclude or ()
         self.sequence = sequence
@@ -394,19 +403,15 @@ class TableBase(object):
             default = self._meta.default
         self.default = default
         self.rows = BoundRows(data=self.data, table=self)
-        self.attrs = AttributeDict(computed_values(attrs if attrs is not None
-                                                         else self._meta.attrs))
+        attrs = computed_values(attrs if attrs is not None else self._meta.attrs)
+        self.attrs = AttributeDict(attrs)
         self.empty_text = empty_text if empty_text is not None else self._meta.empty_text
-        if sortable is not None:
-            warnings.warn("`sortable` is deprecated, use `orderable` instead.",
-                          DeprecationWarning)
-            if orderable is None:
-                orderable = sortable
         self.orderable = orderable
         self.prefix = prefix
         self.order_by_field = order_by_field
         self.page_field = page_field
         self.per_page_field = per_page_field
+        self.show_header = show_header
         # Make a copy so that modifying this will not touch the class
         # definition. Note that this is different from forms, where the
         # copy is made available in a ``fields`` attribute.
@@ -422,7 +427,10 @@ class TableBase(object):
         elif self._meta.sequence:
             self._sequence = self._meta.sequence
         else:
-            self._sequence = Sequence(self._meta.fields + ('...',))
+            if self._meta.fields is not None:
+                self._sequence = Sequence(tuple(self._meta.fields) + ('...', ))
+            else:
+                self._sequence = Sequence(('...', ))
             self._sequence.expand(self.base_columns.keys())
         self.columns = columns.BoundColumns(self)
         # `None` value for order_by means no order is specified. This means we
@@ -445,17 +453,20 @@ class TableBase(object):
         if request:
             RequestConfig(request).configure(self)
 
-    def as_html(self):
+    def as_html(self, request):
         """
-        Render the table to a simple HTML table.
-
-        If this method is used in the request/response cycle, any links
-        generated will clobber the querystring of the request. Use the
-        ``{% render_table %}`` template tag instead.
+        Render the table to a simple HTML table, adding `request` to the context.
         """
         template = get_template(self.template)
-        request = build_request()
-        return template.render(RequestContext(request, {'table': self}))
+
+        context = {'table': self}
+        if VERSION < (1, 8):
+            # TODO: remove if we drop support for django 1.7
+            context = RequestContext(request, context)
+        else:
+            context['request'] = request
+
+        return template.render(context)
 
     @property
     def attrs(self):
@@ -464,6 +475,15 @@ class TableBase(object):
     @attrs.setter
     def attrs(self, value):
         self._attrs = value
+
+    @property
+    def show_header(self):
+        return (self._show_header if self._show_header is not None
+                else self._meta.show_header)
+
+    @show_header.setter
+    def show_header(self, value):
+        self._show_header = value
 
     @property
     def empty_text(self):
@@ -580,29 +600,21 @@ class TableBase(object):
 
     @property
     def orderable(self):
-        return (self._orderable if self._orderable is not None
-                                else self._meta.orderable)
+        if self._orderable is not None:
+            return self._orderable
+        else:
+            return self._meta.orderable
 
     @orderable.setter
     def orderable(self, value):
         self._orderable = value
 
     @property
-    def sortable(self):
-        warnings.warn("`sortable` is deprecated, use `orderable` instead.",
-                      DeprecationWarning)
-        return self.orderable
-
-    @sortable.setter
-    def sortable(self, value):
-        warnings.warn("`sortable` is deprecated, use `orderable` instead.",
-                      DeprecationWarning)
-        self.orderable = value
-
-    @property
     def template(self):
-        return (self._template if self._template is not None
-                               else self._meta.template)
+        if self._template is not None:
+            return self._template
+        else:
+            return self._meta.template
 
     @template.setter
     def template(self, value):
